@@ -19,10 +19,11 @@ from tools.paging import PageAssertionMixin, PageFetcher
 
 class BasePagingTester(Tester):
 
-    def prepare(self, row_factory=dict_factory):
+    def prepare(self, row_factory=dict_factory, hinted_handoff_enabled=True):
         supports_v5_protocol = self.cluster.version() >= LooseVersion('3.10')
         protocol_version = 5 if supports_v5_protocol else None
         cluster = self.cluster
+        cluster.set_configuration_options(values={'hinted_handoff_enabled': hinted_handoff_enabled})
         cluster.populate(3).start(wait_for_binary_proto=True)
         node1 = cluster.nodelist()[0]
         session = self.patient_cql_connection(node1,
@@ -3454,3 +3455,37 @@ class TestPagingWithDeletions(BasePagingTester, PageAssertionMixin):
             # finish paging
             fetcher.request_all()
             self.assertEqual([2, 2], fetcher.num_results_all())
+
+    def test_paging_with_read_repair_multiple_conflicts(self):
+        self.session = self.prepare(hinted_handoff_enabled=False)
+        create_ks(self.session, 'test_paging_read_repair', 3)
+        self.session.execute("CREATE TABLE paging_test ( "
+                             "id int, subid int, val int, "
+                             "PRIMARY KEY (id, subid) )")
+
+        for i in range(1, 6):
+            self.session.execute("INSERT INTO paging_test (id, subid, val) values (1, {}, {})".format(i, i))
+
+        node1, node2, node3 = self.cluster.nodelist()
+        node2.stop()
+        self.session.execute("INSERT INTO paging_test (id, subid, val) values (1, 6, 6)")
+        node2.start()
+
+        node3.stop()
+        for i in range(2, 6):
+            self.session.execute("DELETE FROM paging_test where id = 1 and subid = {}".format(i))
+        self.session.execute("INSERT INTO paging_test (id, subid, val) values (1, 7, 7)")
+        node3.start()
+
+        node1.stop()
+
+        print "first paged read"
+        for row in self.session.execute(SimpleStatement('select * from paging_test where id=1;', consistency_level=CL.QUORUM, fetch_size=2), trace=True):
+            print row
+
+        time.sleep(1)
+        print "second paged read"
+        for row in self.session.execute(SimpleStatement('select * from paging_test where id=1;', consistency_level=CL.QUORUM, fetch_size=2), trace=True):
+            print row
+
+        
