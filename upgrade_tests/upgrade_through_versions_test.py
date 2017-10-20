@@ -432,7 +432,7 @@ class UpgradeTester(Tester):
             node.set_install_dir(version=version_meta.version)
             debug("Set new cassandra dir for %s: %s" % (node.name, node.get_install_dir()))
             if internode_ssl and version_meta.version >= '4.0':
-                node.set_configuration_options({'server_encryption_options': {'enabled': True}})
+                node.set_configuration_options({'server_encryption_options': {'enabled': True, 'enable_legacy_ssl_storage_port': True}})
 
         # hacky? yes. We could probably extend ccm to allow this publicly.
         # the topology file needs to be written before any nodes are started
