@@ -13,9 +13,10 @@ _LOG_ERR_HOST = "^javax.net.ssl.SSLHandshakeException: java.security.cert.Certif
 _LOG_ERR_CERT = "^javax.net.ssl.SSLHandshakeException: Received fatal alert: certificate_unknown$"
 
 
-@since('3.6')
+#@since('3.6')
 class TestNodeToNodeSSLEncryption(Tester):
 
+    @since('3.6')
     def ssl_enabled_test(self):
         """Should be able to start with valid ssl options"""
 
@@ -26,6 +27,7 @@ class TestNodeToNodeSSLEncryption(Tester):
         self.cluster.start()
         self.cql_connection(self.node1)
 
+    @since('3.6')
     def ssl_wrong_hostname_no_validation_test(self):
         """Should be able to start with valid ssl options"""
 
@@ -37,6 +39,7 @@ class TestNodeToNodeSSLEncryption(Tester):
         time.sleep(2)
         self.cql_connection(self.node1)
 
+    @since('3.6')
     def ssl_wrong_hostname_with_validation_test(self):
         """Should be able to start with valid ssl options"""
 
@@ -57,6 +60,7 @@ class TestNodeToNodeSSLEncryption(Tester):
         self.cluster.stop()
         self.assertTrue(found)
 
+    @since('3.6')
     def ssl_client_auth_required_fail_test(self):
         """peers need to perform mutual auth (cient auth required), but do not supply the local cert"""
 
@@ -78,6 +82,7 @@ class TestNodeToNodeSSLEncryption(Tester):
         self.cluster.stop()
         self.assertTrue(found)
 
+    @since('3.6')
     def ssl_client_auth_required_succeed_test(self):
         """peers need to perform mutual auth (cient auth required), but do not supply the loca cert"""
 
@@ -91,6 +96,7 @@ class TestNodeToNodeSSLEncryption(Tester):
         self.cluster.start()
         self.cql_connection(self.node1)
 
+    @since('3.6')
     def ca_mismatch_test(self):
         """CA mismatch should cause nodes to fail to connect"""
 
@@ -112,25 +118,25 @@ class TestNodeToNodeSSLEncryption(Tester):
         credNode2 = sslkeygen.generate_credentials("127.0.0.2", credNode1.cakeystore, credNode1.cacert)
 
         # first, start cluster without TLS (either listening or connecting
-        self.setup_nodes(credNode1, credNode2, internode_encryption='none', listen_ports='plain')
+        self.setup_nodes(credNode1, credNode2, internode_encryption='none', enabled=False)
         self.cluster.start()
         self.cql_connection(self.node1)
 
         # next bounce the cluster to listen on both plain/secure sockets (do not connect secure port, yet, though)
-        self.bounce_node_with_updated_config(credNode1, self.node1, 'none', 'both')
-        self.bounce_node_with_updated_config(credNode2, self.node2, 'none', 'both')
+        self.bounce_node_with_updated_config(credNode1, self.node1, 'none', True, True)
+        self.bounce_node_with_updated_config(credNode2, self.node2, 'none', True, True)
 
         # next connect with TLS for the outbound connections
-        self.bounce_node_with_updated_config(credNode1, self.node1, 'all', 'both')
-        self.bounce_node_with_updated_config(credNode2, self.node2, 'all', 'both')
+        self.bounce_node_with_updated_config(credNode1, self.node1, 'all', True, True)
+        self.bounce_node_with_updated_config(credNode2, self.node2, 'all', True, True)
 
         # now shutdown the plaintext port
-        self.bounce_node_with_updated_config(credNode1, self.node1, 'all', 'secure')
-        self.bounce_node_with_updated_config(credNode2, self.node2, 'all', 'secure')
+        self.bounce_node_with_updated_config(credNode1, self.node1, 'all', True, False)
+        self.bounce_node_with_updated_config(credNode2, self.node2, 'all', True, False)
 
-    def bounce_node_with_updated_config(self, credentials, node, listen_ports, internode_encryption):
+    def bounce_node_with_updated_config(self, credentials, node, internode_encryption, enabled, optional):
         node.stop()
-        self.copy_cred(credentials, node, listen_ports, internode_encryption)
+        self.copy_cred(credentials, node, internode_encryption, enabled, optional)
         node.start(wait_for_binary_proto=True)
 
     def _grep_msg(self, node, *kwargs):
@@ -150,16 +156,16 @@ class TestNodeToNodeSSLEncryption(Tester):
 
         return False
 
-    def setup_nodes(self, credentials1, credentials2, endpointVerification=False, client_auth=False, internode_encryption='all', listen_ports='secure'):
+    def setup_nodes(self, credentials1, credentials2, endpointVerification=False, client_auth=False, internode_encryption='all', enabled=True, optional=False):
         cluster = self.cluster
         cluster = cluster.populate(2)
         self.node1 = cluster.nodelist()[0]
-        self.copy_cred(credentials1, self.node1, internode_encryption, listen_ports)
+        self.copy_cred(credentials1, self.node1, internode_encryption, enabled, optional)
 
         self.node2 = cluster.nodelist()[1]
-        self.copy_cred(credentials2, self.node2, internode_encryption, listen_ports)
+        self.copy_cred(credentials2, self.node2, internode_encryption, enabled, optional)
 
-    def copy_cred(self, credentials, node, internode_encryption, listen_ports, endpointVerification=False, client_auth=False):
+    def copy_cred(self, credentials, node, internode_encryption, enabled=False, optional=False, endpointVerification=False, client_auth=False):
         dir = node.get_conf_dir()
         print("Copying credentials to node %s" % dir)
         kspath = os.path.join(dir, 'keystore.jks')
@@ -169,7 +175,8 @@ class TestNodeToNodeSSLEncryption(Tester):
 
         node.set_configuration_options(values={
             'server_encryption_options': {
-                'listen_ports': listen_ports,
+                'enabled': enabled,
+                'optional': optional,
                 'internode_encryption': internode_encryption,
                 'keystore': kspath,
                 'keystore_password': 'cassandra',
