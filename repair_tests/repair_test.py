@@ -1238,6 +1238,41 @@ class TestRepair(BaseRepairTest):
         node1.watch_log_for('Repair command .* finished', timeout=60)
 
 
+    @since('4.0')
+    def test_repair_after_node_down(self):
+        """
+        Launches a three node cluster, and populates data with a non-default stress schema.
+        Take a node down, and add more data. Then repair and make sure no streaming errors.
+        @jira_ticket CASSANDRA-13938
+        """
+        cluster = self.cluster
+        cluster.set_configuration_options(values={'hinted_handoff_enabled': False})
+        logger.debug("Starting cluster..")
+        cluster.populate(3).start(wait_for_binary_proto=True)
+
+        node1, node2, node3 = cluster.nodelist()
+        node1.stress(['user', 'profile=/opt/dev/patches/13938/13938.yaml', 'ops(insert=20,single=1,series=1)', 'duration=10s', 'no-warmup', '-rate', 'threads=4'])
+        node1.stop()
+
+        node2.stress(['user', 'profile=/opt/dev/patches/13938/13938.yaml', 'ops(insert=20,single=1,series=1)', 'duration=30s', 'no-warmup', '-rate', 'threads=4'])
+        node1.start()
+
+        def node_repair():
+            global nodetool_error
+            try:
+                node1.nodetool('repair -full standard_long test_data')
+            except Exception as e:
+                nodetool_error = e
+
+        logger.debug("repair node1")
+        # Launch in an external thread so it does not hang process
+        t = Thread(target=node_repair)
+        t.start()
+        t.join(timeout=60)
+        assert 0 == len(node1.grep_log_for_errors())
+        node1.watch_log_for('Repair command .* finished', timeout=20)
+
+
 RepairTableContents = namedtuple('RepairTableContents',
                                  ['parent_repair_history', 'repair_history'])
 
