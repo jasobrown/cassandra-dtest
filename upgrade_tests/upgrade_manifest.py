@@ -20,13 +20,13 @@ def _get_version_family():
     current_version = '4.0'
 
     version_family = 'unknown'
-    if current_version.vstring.startswith('2.0'):
+    if current_version.startswith('2.0'):
         version_family = '2.0.x'
-    elif current_version.vstring.startswith('2.1'):
+    elif current_version.startswith('2.1'):
         version_family = '2.1.x'
-    elif current_version.vstring.startswith('2.2'):
+    elif current_version.startswith('2.2'):
         version_family = '2.2.x'
-    elif current_version.vstring.startswith('3.0'):
+    elif current_version.startswith('3.0'):
         version_family = '3.0.x'
     elif '3.1' <= current_version < '4.0':
         version_family = '3.x'
@@ -123,7 +123,10 @@ custom_1 = VersionMeta(name='custom_branch_1', family='2.1.x', variant='indev', 
 custom_2 = VersionMeta(name='custom_branch_2', family='2.2.x', variant='indev', version='git:trunk', min_proto_v=3, max_proto_v=4, java_versions=(7, 8))
 custom_3 = VersionMeta(name='custom_branch_3', family='3.0.x', variant='indev', version='git:cassandra-3.5', min_proto_v=3, max_proto_v=4, java_versions=(7, 8))
 custom_4 = VersionMeta(name='custom_branch_4', family='3.x', variant='indev', version='git:cassandra-3.6', min_proto_v=3, max_proto_v=4, java_versions=(7, 8))
+custom_jeb = VersionMeta(name='custom_JEB', family ='trunk', variant='indev', version='local:/opt/dev/cassandra:trunk', min_proto_v=3, max_proto_v=5, java_versions=(8,))
+
 OVERRIDE_MANIFEST = {
+    current_3_0_x: [custom_jeb]
     # EXAMPLE:
     # custom_1: [custom_2, custom_3],  # creates a test of custom_1 -> custom_2, and another test from custom_1 -> custom_3
     # custom_3: [custom_4]             # creates a test of custom_3 -> custom_4
