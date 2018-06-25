@@ -437,11 +437,11 @@ def pytest_collection_modifyitems(items, config):
         if item.get_marker("resource_intensive"):
             if config.getoption("--force-resource-intensive-tests"):
                 pass
-            if config.getoption("--skip-resource-intensive-tests"):
+            elif config.getoption("--skip-resource-intensive-tests"):
                 deselect_test = True
                 logger.info("SKIP: Deselecting test %s as test marked resource_intensive. To force execution of "
                       "this test re-run with the --force-resource-intensive-tests command line argument" % item.name)
-            if not sufficient_system_resources_resource_intensive:
+            elif not sufficient_system_resources_resource_intensive:
                 deselect_test = True
                 logger.info("SKIP: Deselecting resource_intensive test %s due to insufficient system resources" % item.name)
 
