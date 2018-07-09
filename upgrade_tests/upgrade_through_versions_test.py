@@ -810,7 +810,7 @@ MULTI_UPGRADES = (
                      ('partitioner', 'org.apache.cassandra.dht.RandomPartitioner'),
                  )),
 
-    # Proto v3 upgrades (v3 is supported on 2.1, 2.2, 3.0, 3.11, trunk)
+    # Proto v3 upgrades (v3 is supported on 2.1, 2.2, 3.0, 3.11, 4.0, trunk)
     MultiUpgrade(name='ProtoV3Upgrade_AllVersions_EndsAt_Trunk_HEAD',
                  version_metas=[current_2_1_x, current_2_2_x, current_3_0_x, indev_3_x], protocol_version=3, extra_config=None),
     MultiUpgrade(name='ProtoV3Upgrade_AllVersions_RandomPartitioner_EndsAt_Trunk_HEAD',
@@ -819,7 +819,7 @@ MULTI_UPGRADES = (
                      ('partitioner', 'org.apache.cassandra.dht.RandomPartitioner'),
                  )),
 
-    # Proto v4 upgrades (v4 is supported on 2.2, 3.0, 3.11, trunk)
+    # Proto v4 upgrades (v4 is supported on 2.2, 3.0, 3.11, 4.0, trunk)
     MultiUpgrade(name='ProtoV4Upgrade_AllVersions_EndsAt_Trunk_HEAD',
                  version_metas=[current_2_2_x, current_3_0_x, indev_3_x], protocol_version=4, extra_config=None),
     MultiUpgrade(name='ProtoV4Upgrade_AllVersions_RandomPartitioner_EndsAt_Trunk_HEAD',
@@ -827,6 +827,10 @@ MULTI_UPGRADES = (
                  extra_config=(
                      ('partitioner', 'org.apache.cassandra.dht.RandomPartitioner'),
                  )),
+
+    # Proto v5 upgrades (v5 is supported fully on 4.0).
+    # Note: v5 was added as beta in 3.11 (or in the 3.X series somewhere), but we can punt for upgrade test purposes.
+    # TODO add MultiUpgrades here for protocol version 5 (introduced with cassandra 4.0) once we have 4.1 or 5.0
 )
 
 for upgrade in MULTI_UPGRADES:
