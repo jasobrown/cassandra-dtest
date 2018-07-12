@@ -4,6 +4,7 @@ import ccmlib.repository
 
 from ccmlib.common import is_win, get_version_from_build
 
+
 class DTestConfig:
     def __init__(self):
         self.use_vnodes = True
@@ -17,29 +18,31 @@ class DTestConfig:
         self.cassandra_version_from_build = None
         self.delete_logs = False
         self.execute_upgrade_tests = False
+        self.run_full_upgrade_matrix = False
         self.disable_active_log_watching = False
         self.keep_test_dir = False
         self.enable_jacoco_code_coverage = False
         self.jemalloc_path = find_libjemalloc()
 
-    def setup(self, request):
-        self.use_vnodes = request.config.getoption("--use-vnodes")
-        self.use_off_heap_memtables = request.config.getoption("--use-off-heap-memtables")
-        self.num_tokens = request.config.getoption("--num-tokens")
-        self.data_dir_count = request.config.getoption("--data-dir-count-per-instance")
-        self.force_execution_of_resource_intensive_tests = request.config.getoption("--force-resource-intensive-tests")
-        self.skip_resource_intensive_tests = request.config.getoption("--skip-resource-intensive-tests")
-        if request.config.getoption("--cassandra-dir") is not None:
-            self.cassandra_dir = os.path.expanduser(request.config.getoption("--cassandra-dir"))
-        self.cassandra_version = request.config.getoption("--cassandra-version")
+    def setup(self, config):
+        self.use_vnodes = config.getoption("--use-vnodes")
+        self.use_off_heap_memtables = config.getoption("--use-off-heap-memtables")
+        self.num_tokens = config.getoption("--num-tokens")
+        self.data_dir_count = config.getoption("--data-dir-count-per-instance")
+        self.force_execution_of_resource_intensive_tests = config.getoption("--force-resource-intensive-tests")
+        self.skip_resource_intensive_tests = config.getoption("--skip-resource-intensive-tests")
+        if config.getoption("--cassandra-dir") is not None:
+            self.cassandra_dir = os.path.expanduser(config.getoption("--cassandra-dir"))
+        self.cassandra_version = config.getoption("--cassandra-version")
 
         self.cassandra_version_from_build = self.get_version_from_build()
 
-        self.delete_logs = request.config.getoption("--delete-logs")
-        self.execute_upgrade_tests = request.config.getoption("--execute-upgrade-tests")
-        self.disable_active_log_watching = request.config.getoption("--disable-active-log-watching")
-        self.keep_test_dir = request.config.getoption("--keep-test-dir")
-        self.enable_jacoco_code_coverage = request.config.getoption("--enable-jacoco-code-coverage")
+        self.delete_logs = config.getoption("--delete-logs")
+        self.execute_upgrade_tests = config.getoption("--execute-upgrade-tests")
+        self.run_full_upgrade_matrix = config.getoption("--run-full-upgrade-matrix")
+        self.disable_active_log_watching = config.getoption("--disable-active-log-watching")
+        self.keep_test_dir = config.getoption("--keep-test-dir")
+        self.enable_jacoco_code_coverage = config.getoption("--enable-jacoco-code-coverage")
 
     def get_version_from_build(self):
         # There are times when we want to know the C* version we're testing against
@@ -52,7 +55,6 @@ class DTestConfig:
             return get_version_from_build(ccm_repo_cache_dir)
         elif self.cassandra_dir is not None:
             return get_version_from_build(self.cassandra_dir)
-
 
 
 # Determine the location of the libjemalloc jar so that we can specify it

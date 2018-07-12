@@ -39,8 +39,6 @@ if len(config.read(os.path.expanduser('~/.cassandra-dtest'))) > 0:
     if config.has_option('main', 'default_dir'):
         DEFAULT_DIR = os.path.expanduser(config.get('main', 'default_dir'))
 
-RUN_STATIC_UPGRADE_MATRIX = os.environ.get('RUN_STATIC_UPGRADE_MATRIX', '').lower() in ('yes', 'true')
-
 logger = logging.getLogger(__name__)
 
 
@@ -270,7 +268,9 @@ def get_eager_protocol_version(cassandra_version):
     Returns the highest protocol version accepted
     by the given C* version
     """
-    if cassandra_version >= '2.2':
+    if cassandra_version >= '4.0':
+        protocol_version = 5
+    elif cassandra_version >= '2.2':
         protocol_version = 4
     elif cassandra_version >= '2.1':
         protocol_version = 3

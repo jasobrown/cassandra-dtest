@@ -66,6 +66,9 @@ def pytest_addoption(parser):
                      help="Delete all generated logs created by a test after the completion of a test.")
     parser.addoption("--execute-upgrade-tests", action="store_true", default=False,
                      help="Execute Cassandra Upgrade Tests (e.g. tests annotated with the upgrade_test mark)")
+    parser.addoption("--run-full-upgrade-matrix", action="store_true", default=False,
+                     help="If executing upgrade tests, this flag indicates if all upgrade combos should be run; "
+                          "if not set, only combos up to the currently selected cassandra version are executed")
     parser.addoption("--disable-active-log-watching", action="store_true", default=False,
                      help="Disable ccm active log watching, which will cause dtests to check for errors in the "
                           "logs in a single operation instead of semi-realtime processing by consuming "
@@ -395,7 +398,7 @@ def install_debugging_signal_handler():
 @pytest.fixture(scope='session')
 def dtest_config(request):
     dtest_config = DTestConfig()
-    dtest_config.setup(request)
+    dtest_config.setup(request.config)
 
     # if we're on mac, check that we have the required loopback interfaces before doing anything!
     check_required_loopback_interfaces_available()

@@ -2,8 +2,6 @@ import logging
 
 from collections import namedtuple
 
-from dtest import RUN_STATIC_UPGRADE_MATRIX
-
 logger = logging.getLogger(__name__)
 
 # UpgradePath's contain data about upgrade paths we wish to test
@@ -12,35 +10,24 @@ UpgradePath = namedtuple('UpgradePath', ('name', 'starting_version', 'upgrade_ve
                                          'starting_meta', 'upgrade_meta'))
 
 
-def _get_version_family():
-    """
-    Detects the version family (line) using dtest.py:CASSANDRA_VERSION_FROM_BUILD
-    """
-    # todo CASSANDRA-14421
-    # current_version = CASSANDRA_VERSION_FROM_BUILD
-    current_version = '4.0'
+def version_family_from_config(dtest_config):
+    current_version = dtest_config.get_version_from_build()
 
-    version_family = 'unknown'
-    if current_version.startswith('2.0'):
-        version_family = '2.0.x'
-    elif current_version.startswith('2.1'):
-        version_family = '2.1.x'
-    elif current_version.startswith('2.2'):
-        version_family = '2.2.x'
-    elif current_version.startswith('3.0'):
-        version_family = '3.0.x'
-    elif '3.1' <= current_version < '4.0':
-        version_family = '3.x'
+    if current_version.vstring.startswith('2.0'):
+        return '2.0.x'
+    elif current_version.vstring.startswith('2.1'):
+        return '2.1.x'
+    elif current_version.vstring.startswith('2.2'):
+        return '2.2.x'
+    elif current_version.vstring.startswith('3.0'):
+        return '3.0.x'
+    elif '3.1' <= current_version.vstring < '4.0':
+        return '3.x'
     elif '4.0' <= current_version < '4.1':
-        version_family = 'trunk'
-    else:
-        # when this occurs, it's time to update this manifest a bit!
-        raise RuntimeError("4.1+ not yet supported on upgrade tests!")
+        return 'trunk'
 
-    return version_family
-
-
-VERSION_FAMILY = _get_version_family()
+    # when this occurs, it's time to update this manifest a bit!
+    raise RuntimeError("4.1+ not yet supported on upgrade tests!")
 
 
 class VersionMeta(namedtuple('_VersionMeta', ('name', 'family', 'variant', 'version', 'min_proto_v',
@@ -54,22 +41,19 @@ class VersionMeta(namedtuple('_VersionMeta', ('name', 'family', 'variant', 'vers
     def java_version(self):
         return max(self.java_versions)
 
-    @property
-    def matches_current_env_version_family(self):
+    def matches_current_env_version_family(self, dtest_config):
         """
         Returns boolean indicating whether this meta matches the current version family of the environment.
 
         e.g. Returns true if the current env version family is 3.x and the meta's family attribute is a match.
         """
-        return self.family == VERSION_FAMILY
+        return self.family == version_family_from_config(dtest_config=dtest_config)
 
-    def clone_with_local_env_version(self):
+    def clone_with_local_env_version(self, dtest_config):
         """
         Returns a new object cloned from this one, with the version replaced with the local env version.
         """
-        # todo CASSANDRA-14421
-        # return self._replace(version=CASSANDRA_GITREF or CASSANDRA_VERSION_FROM_BUILD)
-        return self
+        return self._replace(version=dtest_config.get_version_from_build)
 
 
 indev_2_0_x = None  # None if release not likely
@@ -121,11 +105,11 @@ MANIFEST = {
     indev_2_2_x: [indev_3_0_x, current_3_0_x, indev_3_x, current_3_x],
     current_2_2_x: [indev_2_2_x, indev_3_0_x, current_3_0_x, indev_3_x, current_3_x],
 
-    indev_3_0_x: [indev_3_x, current_3_x],
+    indev_3_0_x: [indev_3_x, current_3_x, indev_trunk],
     current_3_0_x: [indev_3_0_x, indev_3_x, current_3_x, indev_trunk],
 
-    current_3_x: [indev_3_x, indev_trunk],
-    indev_3_x: [indev_trunk]
+    indev_3_x: [indev_trunk],
+    current_3_x: [indev_3_x, indev_trunk]
 }
 
 # Local env and custom path testing instructions. Use these steps to REPLACE the normal upgrade test cases with your own
@@ -183,7 +167,7 @@ def _is_targeted_variant_combo(origin_meta, destination_meta):
     return (origin_meta.variant == 'current' and destination_meta.variant == 'indev')
 
 
-def build_upgrade_pairs():
+def build_upgrade_pairs(dtest_config):
     """
     Using the manifest (above), builds a set of valid upgrades, according to current testing practices.
 
@@ -213,12 +197,12 @@ def build_upgrade_pairs():
 
             path_name = 'Upgrade_' + origin_meta.name + '_To_' + destination_meta.name
 
-            if not (RUN_STATIC_UPGRADE_MATRIX or OVERRIDE_MANIFEST):
-                if destination_meta.matches_current_env_version_family:
+            if not (dtest_config.run_full_upgrade_matrix or OVERRIDE_MANIFEST):
+                if destination_meta.matches_current_env_version_family(dtest_config):
                     # looks like this test should actually run in the current env,
                     # so let's set the final version to match the env exactly
                     oldmeta = destination_meta
-                    newmeta = destination_meta.clone_with_local_env_version()
+                    newmeta = destination_meta.clone_with_local_env_version(dtest_config)
                     logger.debug("{} appears applicable to current env. Overriding final test version from {} to {}"
                                  .format(path_name, oldmeta.version, newmeta.version))
                     destination_meta = newmeta

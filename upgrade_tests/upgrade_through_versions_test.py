@@ -1,6 +1,5 @@
 import operator
 import os
-import pprint
 import random
 import signal
 import time
@@ -16,12 +15,13 @@ from queue import Empty, Full
 from cassandra import ConsistencyLevel, WriteTimeout
 from cassandra.query import SimpleStatement
 
-from dtest import RUN_STATIC_UPGRADE_MATRIX, Tester
+from dtest import Tester
+from dtest_config import DTestConfig
 from tools.misc import generate_ssl_stores, new_node
 from .upgrade_base import switch_jdks
 from .upgrade_manifest import (build_upgrade_pairs, current_2_0_x,
-                              current_2_1_x, current_2_2_x, current_3_0_x,
-                              indev_2_2_x, indev_3_x)
+                               current_2_1_x, current_2_2_x, current_3_0_x, current_3_x,
+                               indev_2_2_x, indev_trunk, version_family_from_config)
 
 logger = logging.getLogger(__name__)
 
@@ -233,6 +233,7 @@ class TestUpgrade(Tester):
     test_version_metas = None  # set on init to know which versions to use
     subprocs = None  # holds any subprocesses, for status checking and cleanup
     extra_config = None  # holds a non-mutable structure that can be cast as dict()
+    protocol_version = None
 
     @pytest.fixture(autouse=True)
     def fixture_add_additional_log_patterns(self, fixture_dtest_setup):
@@ -248,51 +249,30 @@ class TestUpgrade(Tester):
             r'Unknown column cdc during deserialization',
         )
 
+    # TODO:JEB literally have no fucking idea if/how this is called.
+    # setting os.env should be unused.
+    # setUp used almost nowhere else in code base - might be legacy naming from nosetest
+    # os.environ['CASSANDRA_VERSION'] only set here and in upgrade_base
     def setUp(self):
-        logger.debug("Upgrade test beginning, setting CASSANDRA_VERSION to {}, and jdk to {}. (Prior values will be restored after test)."
-              .format(self.test_version_metas[0].version, self.test_version_metas[0].java_version))
+        logger.debug("Upgrade test beginning, setting CASSANDRA_VERSION to {}, and jdk to {}. "
+                     "(Prior values will be restored after test)."
+                     .format(self.test_version_metas[0].version, self.test_version_metas[0].java_version))
         os.environ['CASSANDRA_VERSION'] = self.test_version_metas[0].version
         switch_jdks(self.test_version_metas[0].java_version)
 
         super(TestUpgrade, self).setUp()
         logger.debug("Versions to test (%s): %s" % (type(self), str([v.version for v in self.test_version_metas])))
 
+    # TODO:JEB literally have no fucking idea if this is called. there's a reference to "cls.init_config"
+    # in dtest_setup, but it's commented out :( #fml
     def init_config(self):
         Tester.init_config(self)
 
-        if self.extra_config is not None:
-            logger.debug("Setting extra configuration options:\n{}".format(
-                pprint.pformat(dict(self.extra_config), indent=4))
-            )
-            self.cluster.set_configuration_options(
-                values=dict(self.extra_config)
-            )
+    def test_upgrade_scenario(self, multi_upgrade, partitioner, internode_ssl, rolling, populate=True,
+                              create_schema=True, after_upgrade_call=()):
+        self.protocol_version = multi_upgrade.protocol_version
+        self.test_version_metas = multi_upgrade.version_metas
 
-    def test_parallel_upgrade(self):
-        """
-        Test upgrading cluster all at once (requires cluster downtime).
-        """
-        self.upgrade_scenario()
-
-    def test_rolling_upgrade(self):
-        """
-        Test rolling upgrade of the cluster, so we have mixed versions part way through.
-        """
-        self.upgrade_scenario(rolling=True)
-
-    def test_parallel_upgrade_with_internode_ssl(self):
-        """
-        Test upgrading cluster all at once (requires cluster downtime), with internode ssl.
-        """
-        self.upgrade_scenario(internode_ssl=True)
-
-    def test_rolling_upgrade_with_internode_ssl(self):
-        """
-        Rolling upgrade test using internode ssl.
-        """
-        self.upgrade_scenario(rolling=True, internode_ssl=True)
-
-    def upgrade_scenario(self, populate=True, create_schema=True, rolling=False, after_upgrade_call=(), internode_ssl=False):
         # Record the rows we write as we go:
         self.row_values = set()
         cluster = self.cluster
@@ -301,6 +281,8 @@ class TestUpgrade(Tester):
                                                'enable_scripted_user_defined_functions': 'true'})
         elif cluster.version() >= '2.2':
             cluster.set_configuration_options({'enable_user_defined_functions': 'true'})
+
+        cluster.set_configuration_options({'partitioner': partitioner})
 
         if internode_ssl:
             logger.debug("***using internode ssl***")
@@ -382,6 +364,7 @@ class TestUpgrade(Tester):
 
         cluster.stop()
 
+    # TODO:JEB see conftest::fixture_dtest_setup for tear down (after each function(?)) info
     def tearDown(self):
         # just to be super sure we get cleaned up
         self._terminate_subprocs()
@@ -745,114 +728,99 @@ class BootstrapMixin(object):
                 );""")
 
 
-def create_upgrade_class(clsname, version_metas, protocol_version,
-                         bootstrap_test=False, extra_config=None):
-    """
-    Dynamically creates a test subclass for testing the given versions.
-
-    'clsname' is the name of the new class.
-    'protocol_version' is an int.
-    'bootstrap_test' is a boolean, if True bootstrap testing will be included. Default False.
-    'version_list' is a list of versions ccm will recognize, to be upgraded in order.
-    'extra_config' is tuple of config options that can (eventually) be cast as a dict,
-    e.g. (('partitioner', org.apache.cassandra.dht.Murmur3Partitioner''))
-    """
-    if extra_config is None:
-        extra_config = (('partitioner', 'org.apache.cassandra.dht.Murmur3Partitioner'),)
-
-    if bootstrap_test:
-        parent_classes = (TestUpgrade, BootstrapMixin)
-    else:
-        parent_classes = (TestUpgrade,)
-
-    # short names for debug output
-    parent_class_names = [cls.__name__ for cls in parent_classes]
-
-    print("Creating test class {} ".format(clsname))
-    print("  for C* versions:\n{} ".format(pprint.pformat(version_metas)))
-    print("  using protocol: v{}, and parent classes: {}".format(protocol_version, parent_class_names))
-    print("  to run these tests alone, use `nosetests {}.py:{}`".format(__name__, clsname))
-
-    upgrade_applies_to_env = RUN_STATIC_UPGRADE_MATRIX or version_metas[-1].matches_current_env_version_family
-    if not upgrade_applies_to_env:
-        pytest.mark.skip(reason='test not applicable to env.')
-    newcls = type(
-            clsname,
-            parent_classes,
-            {'test_version_metas': version_metas, '__test__': True, 'protocol_version': protocol_version, 'extra_config': extra_config}
-        )
-
-    if clsname in globals():
-        raise RuntimeError("Class by name already exists!")
-
-    globals()[clsname] = newcls
-    return newcls
-
-
-MultiUpgrade = namedtuple('MultiUpgrade', ('name', 'version_metas', 'protocol_version', 'extra_config'))
+MultiUpgrade = namedtuple('MultiUpgrade', ('name', 'version_metas', 'protocol_version'))
 
 MULTI_UPGRADES = (
     # Proto v1 upgrades (v1 supported on 2.0, 2.1, 2.2)
     MultiUpgrade(name='ProtoV1Upgrade_AllVersions_EndsAt_indev_2_2_x',
-                 version_metas=[current_2_0_x, current_2_1_x, indev_2_2_x], protocol_version=1, extra_config=None),
-    MultiUpgrade(name='ProtoV1Upgrade_AllVersions_RandomPartitioner_EndsAt_indev_2_2_x',
-                 version_metas=[current_2_0_x, current_2_1_x, indev_2_2_x], protocol_version=1,
-                 extra_config=(
-                     ('partitioner', 'org.apache.cassandra.dht.RandomPartitioner'),
-                 )),
+                 version_metas=[current_2_0_x, current_2_1_x, indev_2_2_x],
+                 protocol_version=1),
 
     # Proto v2 upgrades (v2 is supported on 2.0, 2.1, 2.2)
     MultiUpgrade(name='ProtoV2Upgrade_AllVersions_EndsAt_indev_2_2_x',
-                 version_metas=[current_2_0_x, current_2_1_x, indev_2_2_x], protocol_version=2, extra_config=None),
-    MultiUpgrade(name='ProtoV2Upgrade_AllVersions_RandomPartitioner_EndsAt_indev_2_2_x',
-                 version_metas=[current_2_0_x, current_2_1_x, indev_2_2_x], protocol_version=2,
-                 extra_config=(
-                     ('partitioner', 'org.apache.cassandra.dht.RandomPartitioner'),
-                 )),
+                 version_metas=[current_2_0_x, current_2_1_x, indev_2_2_x],
+                 protocol_version=2),
 
     # Proto v3 upgrades (v3 is supported on 2.1, 2.2, 3.0, 3.11, 4.0, trunk)
     MultiUpgrade(name='ProtoV3Upgrade_AllVersions_EndsAt_Trunk_HEAD',
-                 version_metas=[current_2_1_x, current_2_2_x, current_3_0_x, indev_3_x], protocol_version=3, extra_config=None),
-    MultiUpgrade(name='ProtoV3Upgrade_AllVersions_RandomPartitioner_EndsAt_Trunk_HEAD',
-                 version_metas=[current_2_1_x, current_2_2_x, current_3_0_x, indev_3_x], protocol_version=3,
-                 extra_config=(
-                     ('partitioner', 'org.apache.cassandra.dht.RandomPartitioner'),
-                 )),
+                 version_metas=[current_2_1_x, current_2_2_x, current_3_0_x, current_3_x, indev_trunk],
+                 protocol_version=3),
 
     # Proto v4 upgrades (v4 is supported on 2.2, 3.0, 3.11, 4.0, trunk)
     MultiUpgrade(name='ProtoV4Upgrade_AllVersions_EndsAt_Trunk_HEAD',
-                 version_metas=[current_2_2_x, current_3_0_x, indev_3_x], protocol_version=4, extra_config=None),
-    MultiUpgrade(name='ProtoV4Upgrade_AllVersions_RandomPartitioner_EndsAt_Trunk_HEAD',
-                 version_metas=[current_2_2_x, current_3_0_x, indev_3_x], protocol_version=4,
-                 extra_config=(
-                     ('partitioner', 'org.apache.cassandra.dht.RandomPartitioner'),
-                 )),
+                 version_metas=[current_2_2_x, current_3_0_x, current_3_x, indev_trunk],
+                 protocol_version=4),
 
     # Proto v5 upgrades (v5 is supported fully on 4.0).
     # Note: v5 was added as beta in 3.11 (or in the 3.X series somewhere), but we can punt for upgrade test purposes.
-    # TODO add MultiUpgrades here for protocol version 5 (introduced with cassandra 4.0) once we have 4.1 or 5.0
+    MultiUpgrade(name='ProtoV5Upgrade_AllVersions_EndsAt_Trunk_HEAD',
+                 version_metas=None, protocol_version=5),
 )
 
-for upgrade in MULTI_UPGRADES:
-    # if any version_metas are None, this means they are versions not to be tested currently
-    if all(upgrade.version_metas):
-        metas = upgrade.version_metas
 
-        if not RUN_STATIC_UPGRADE_MATRIX:
-            if metas[-1].matches_current_env_version_family:
-                # looks like this test should actually run in the current env, so let's set the final version to match the env exactly
-                oldmeta = metas[-1]
-                newmeta = oldmeta.clone_with_local_env_version()
-                logger.debug("{} appears applicable to current env. Overriding final test version from {} to {}".format(upgrade.name, oldmeta.version, newmeta.version))
-                metas[-1] = newmeta
-
-        create_upgrade_class(upgrade.name, [m for m in metas], protocol_version=upgrade.protocol_version, extra_config=upgrade.extra_config)
+bootstrap = [ None, 'bootstrap', 'bootstrap_multidc']
 
 
-for pair in build_upgrade_pairs():
-    create_upgrade_class(
-        'Test' + pair.name,
-        [pair.starting_meta, pair.upgrade_meta],
-        protocol_version=pair.starting_meta.max_proto_v,
-        bootstrap_test=True
-    )
+def pytest_generate_tests(metafunc):
+    """
+    A pytest collection hook to generate the parametrizations necessary for running our upgrade tests.
+    Generates to sets of parametrizations:
+    1) tests aimed at ensuring the native protocol version works correctly with the declared c* versions that
+    support it.
+    2) tests that focus on the server upgrade itself, including checking for bootstrap and multi-dc happiness.
+    """
+
+    # getting the dtest_config is a bit of a hack around pytest. pytest executes the parametrization hooks
+    # (for collecting tests) before the fixtures are run (as those are executed when running test functions).
+    # Thus we can't get the config from executing the fixture. However, it's easy enough to get a *correct* config
+    # by instantiating the DTestConfig and then passing it the metafunc.config, which is basically the cmd line args.
+    dtest_config = DTestConfig()
+    dtest_config.setup(metafunc.config)
+
+    # build up a set of upgrades to test the client's native protocol version works successfully across upgrades
+    upgrades_to_run = []
+    for upgrade in MULTI_UPGRADES:
+        # if any version_metas are None, this means they are versions not to be tested currently
+        if upgrade.version_metas and all(upgrade.version_metas):
+            if dtest_config.run_full_upgrade_matrix:
+                upgrades_to_run.append(upgrade)
+            else:
+                metas = upgrade.version_metas
+
+                # only execute the multi_upgrades that end on the same version of what we're testing with
+                # if metas[-1].family == version_family_from_config(dtest_config):
+                if metas[-1].matches_current_env_version_family(dtest_config):
+                    # looks like this test should actually run in the current env, so let's set the final version to
+                    # match the env exactly
+                    oldmeta = metas[-1]
+                    newmeta = oldmeta.clone_with_local_env_version(dtest_config)
+                    logger.debug("{} appears applicable to current env. Overriding final test version from {} to {}"
+                                 .format(upgrade.name, oldmeta.version, newmeta.version))
+                    metas[-1] = newmeta
+                    upgrades_to_run.append(upgrade)
+
+    metafunc.parametrize('multi_upgrade', upgrades_to_run, ids=multi_upgrade_test_id)
+
+    metafunc.parametrize("rolling", [True, False], ids=['rolling_upgrade', 'parallel_upgrade'])
+    partitioners = ['org.apache.cassandra.dht.Murmur3Partitioner', 'org.apache.cassandra.dht.RandomPartitioner']
+    metafunc.parametrize("partitioner", partitioners, ids=partitioner_test_id)
+    metafunc.parametrize("internode_ssl", [True, False], ids=['with_internode_ssl', 'without_internode_ssl'])
+
+    # build up a set of upgrades to test the full upgrade (and bootstrap) paths
+    # pair is type upgrade_manifest::UpgradePath -- "python can fucking eat me", @jasobrown 2018
+    for pair in build_upgrade_pairs(dtest_config):
+        pytest.set_trace()
+#     create_upgrade_class(
+#         'Test' + pair.name,
+#         [pair.starting_meta, pair.upgrade_meta],
+#         protocol_version=pair.starting_meta.max_proto_v,
+#         bootstrap_test=True
+#     )
+
+
+def partitioner_test_id(partitioner):
+    return partitioner.split('.')[-1]
+
+
+def multi_upgrade_test_id(multi_upgrade):
+    return multi_upgrade.name
