@@ -35,6 +35,8 @@ import logging
 
 from os import getcwd
 from tempfile import NamedTemporaryFile
+
+import pytest
 from bs4 import BeautifulSoup
 
 from _pytest.config import Parser
@@ -77,6 +79,9 @@ class RunDTests():
                                  "of test functions)")
         parser.add_argument("--dtest-print-tests-only", action="store_true", default=False,
                             help="Print list of all tests found eligible for execution given the provided options.")
+        parser.add_argument("--dtest-print-upgrade-tests-only", action="store_true", default=False,
+                            help="Print list of all upgrade tests found eligible for execution "
+                                 "given the provided options.")
         parser.add_argument("--dtest-print-tests-output", action="store", default=False,
                             help="Path to file where the output of --dtest-print-tests-only should be written to")
         parser.add_argument("--pytest-options", action="store", default=None,
@@ -120,6 +125,10 @@ class RunDTests():
 
         if args.dtest_print_tests_only:
             args_to_invoke_pytest.append("'--collect-only'")
+        if args.dtest_print_upgrade_tests_only:
+            args_to_invoke_pytest.append("'--collect-only'")
+            args_to_invoke_pytest.append("'--execute-upgrade-tests'")
+            args_to_invoke_pytest.append("'--force-resource-intensive-test'")
 
         if args.dtest_tests:
             for test in args.dtest_tests.split(","):
@@ -155,7 +164,7 @@ class RunDTests():
 
         sp = subprocess.Popen(cmd_list, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=os.environ.copy())
 
-        if args.dtest_print_tests_only:
+        if args.dtest_print_tests_only or args.dtest_print_upgrade_tests_only:
             stdout, stderr = sp.communicate()
 
             if stderr:

@@ -21,7 +21,7 @@ from tools.misc import generate_ssl_stores, new_node
 from .upgrade_base import switch_jdks
 from .upgrade_manifest import (build_upgrade_pairs, current_2_0_x,
                                current_2_1_x, current_2_2_x, current_3_0_x, current_3_x,
-                               indev_2_2_x, indev_trunk, version_family_from_config)
+                               indev_2_2_x, indev_trunk)
 
 logger = logging.getLogger(__name__)
 
@@ -268,10 +268,9 @@ class TestUpgrade(Tester):
     def init_config(self):
         Tester.init_config(self)
 
-    def test_upgrade_scenario(self, multi_upgrade, partitioner, internode_ssl, rolling, populate=True,
-                              create_schema=True, after_upgrade_call=()):
-        self.protocol_version = multi_upgrade.protocol_version
-        self.test_version_metas = multi_upgrade.version_metas
+    def test_upgrade_scenario(self, upgrade_test_config, partitioner, internode_ssl, rolling):
+        self.protocol_version = upgrade_test_config.protocol_version
+        self.test_version_metas = upgrade_test_config.version_metas
 
         # Record the rows we write as we go:
         self.row_values = set()
@@ -289,27 +288,28 @@ class TestUpgrade(Tester):
             generate_ssl_stores(self.fixture_dtest_setup.test_path)
             self.cluster.enable_internode_ssl(self.fixture_dtest_setup.test_path)
 
-        if populate:
+        after_upgrade_call = None
+        if upgrade_test_config.bootstrap == 'bootstrap_multidc':
+            after_upgrade_call = self.setup_bootstrap_multidc()
+        else:
             # Start with 3 node cluster
             logger.debug('Creating cluster (%s)' % self.test_version_metas[0].version)
             cluster.populate(3)
             [node.start(use_jna=True, wait_for_binary_proto=True) for node in cluster.nodelist()]
-        else:
-            logger.debug("Skipping cluster creation (should already be built)")
+
+            if rolling:
+                self._create_schema_for_rolling()
+            else:
+                self._create_schema()
+            time.sleep(5)  # sigh...
+
+            if upgrade_test_config.bootstrap == 'bootstrap':
+                after_upgrade_call = self.setup_bootstrap()
 
         # add nodes to self for convenience
         for i, node in enumerate(cluster.nodelist(), 1):
             node_name = 'node' + str(i)
             setattr(self, node_name, node)
-
-        if create_schema:
-            if rolling:
-                self._create_schema_for_rolling()
-            else:
-                self._create_schema()
-        else:
-            logger.debug("Skipping schema creation (should already be built)")
-        time.sleep(5)  # sigh...
 
         self._log_current_ver(self.test_version_metas[0])
 
@@ -322,8 +322,8 @@ class TestUpgrade(Tester):
                 for num, node in enumerate(self.cluster.nodelist()):
                     # sleep (sigh) because driver needs extra time to keep up with topo and make quorum possible
                     # this is ok, because a real world upgrade would proceed much slower than this programmatic one
-                    # additionally this should provide more time for timeouts and other issues to crop up as well, which we could
-                    # possibly "speed past" in an overly fast upgrade test
+                    # additionally this should provide more time for timeouts and other issues to crop up as well,
+                    # which we could possibly "speed past" in an overly fast upgrade test
                     time.sleep(60)
 
                     self.upgrade_to_version(version_meta, partial=True, nodes=(node,), internode_ssl=internode_ssl)
@@ -337,7 +337,8 @@ class TestUpgrade(Tester):
             # Stop write processes
             write_proc.terminate()
             # wait for the verification queue's to empty (and check all rows) before continuing
-            self._wait_until_queue_condition('writes pending verification', verification_queue, operator.le, 0, max_wait_s=1200)
+            self._wait_until_queue_condition('writes pending verification', verification_queue, operator.le, 0,
+                                             max_wait_s=1200)
             self._check_on_subprocs([verify_proc])  # make sure the verification processes are running still
 
             self._terminate_subprocs()
@@ -652,15 +653,6 @@ class TestUpgrade(Tester):
         else:
             self.fail("Count query did not return")
 
-
-class BootstrapMixin(object):
-    """
-    Can be mixed into UpgradeTester or a subclass thereof to add bootstrap tests.
-
-    Using this class is not currently feasible on lengthy upgrade paths, as each
-    version bump adds a node and this will eventually exhaust resources.
-    """
-
     def _bootstrap_new_node(self):
         # Check we can bootstrap a new node on the upgraded cluster:
         logger.debug("Adding a node to the cluster")
@@ -682,11 +674,11 @@ class BootstrapMixin(object):
         self._check_values()
         self._check_counters()
 
-    def test_bootstrap(self):
+    def setup_bootstrap(self):
         # try and add a new node
-        self.upgrade_scenario(after_upgrade_call=(self._bootstrap_new_node,))
+        return self._bootstrap_new_node
 
-    def test_bootstrap_multidc(self):
+    def setup_bootstrap_multidc(self):
         # try and add a new node
         # multi dc, 2 nodes in each dc
         cluster = self.cluster
@@ -700,7 +692,7 @@ class BootstrapMixin(object):
         cluster.populate([2, 2])
         [node.start(use_jna=True, wait_for_binary_proto=True) for node in self.cluster.nodelist()]
         self._multidc_schema_create()
-        self.upgrade_scenario(populate=False, create_schema=False, after_upgrade_call=(self._bootstrap_new_node_multidc,))
+        return self._bootstrap_new_node_multidc
 
     def _multidc_schema_create(self):
         session = self.patient_cql_connection(self.cluster.nodelist()[0], protocol_version=self.protocol_version)
@@ -758,7 +750,7 @@ MULTI_UPGRADES = (
 )
 
 
-bootstrap = [ None, 'bootstrap', 'bootstrap_multidc']
+UpgradeTestConfig = namedtuple('UpgradeTestConfig', ('name', 'version_metas', 'protocol_version', 'bootstrap'))
 
 
 def pytest_generate_tests(metafunc):
@@ -768,6 +760,12 @@ def pytest_generate_tests(metafunc):
     1) tests aimed at ensuring the native protocol version works correctly with the declared c* versions that
     support it.
     2) tests that focus on the server upgrade itself, including checking for bootstrap and multi-dc happiness.
+
+    TODO:JEB clean up this comment
+    (kinda) note-to-self: this will generate the list of executable test names, on both --collect-only as well as
+    full testing runs. Fortunately, we do not need to build a name de-mangler for running a specific test
+    because the run names are generated on test runs, and as long as you pass in the 'parametrization' name
+    with a '-k' on the cli, pytest will match that cli param against the generated list.
     """
 
     # getting the dtest_config is a bit of a hack around pytest. pytest executes the parametrization hooks
@@ -783,7 +781,9 @@ def pytest_generate_tests(metafunc):
         # if any version_metas are None, this means they are versions not to be tested currently
         if upgrade.version_metas and all(upgrade.version_metas):
             if dtest_config.run_full_upgrade_matrix:
-                upgrades_to_run.append(upgrade)
+                upgrades_to_run.append(UpgradeTestConfig(bootstrap=None, name=upgrade.name,
+                                                         version_metas=upgrade.version_metas,
+                                                         protocol_version=upgrade.protocol_version))
             else:
                 metas = upgrade.version_metas
 
@@ -797,30 +797,32 @@ def pytest_generate_tests(metafunc):
                     logger.debug("{} appears applicable to current env. Overriding final test version from {} to {}"
                                  .format(upgrade.name, oldmeta.version, newmeta.version))
                     metas[-1] = newmeta
-                    upgrades_to_run.append(upgrade)
-
-    metafunc.parametrize('multi_upgrade', upgrades_to_run, ids=multi_upgrade_test_id)
-
-    metafunc.parametrize("rolling", [True, False], ids=['rolling_upgrade', 'parallel_upgrade'])
-    partitioners = ['org.apache.cassandra.dht.Murmur3Partitioner', 'org.apache.cassandra.dht.RandomPartitioner']
-    metafunc.parametrize("partitioner", partitioners, ids=partitioner_test_id)
-    metafunc.parametrize("internode_ssl", [True, False], ids=['with_internode_ssl', 'without_internode_ssl'])
+                    upgrades_to_run.append(UpgradeTestConfig(bootstrap=None, name=upgrade.name, version_metas=metas,
+                                                             protocol_version=upgrade.protocol_version))
 
     # build up a set of upgrades to test the full upgrade (and bootstrap) paths
     # pair is type upgrade_manifest::UpgradePath -- "python can fucking eat me", @jasobrown 2018
     for pair in build_upgrade_pairs(dtest_config):
-        pytest.set_trace()
-#     create_upgrade_class(
-#         'Test' + pair.name,
-#         [pair.starting_meta, pair.upgrade_meta],
-#         protocol_version=pair.starting_meta.max_proto_v,
-#         bootstrap_test=True
-#     )
+        upgrades_to_run.append(UpgradeTestConfig(bootstrap=None, name=pair.name,
+                                                 version_metas=[pair.starting_meta, pair.upgrade_meta],
+                                                 protocol_version=pair.starting_meta.max_proto_v))
+
+    metafunc.parametrize('upgrade_test_config', upgrades_to_run, ids=upgrade_test_config_id)
+
+    # general parameters of which all combinations should be executed
+    metafunc.parametrize("rolling", [True, False], ids=['rolling_upgrade', 'parallel_upgrade'])
+    partitioners = ['org.apache.cassandra.dht.Murmur3Partitioner', 'org.apache.cassandra.dht.RandomPartitioner']
+    metafunc.parametrize("partitioner", partitioners, ids=partitioner_id)
+    metafunc.parametrize("internode_ssl", [True, False], ids=['with_internode_ssl', 'without_internode_ssl'])
 
 
-def partitioner_test_id(partitioner):
+def partitioner_id(partitioner):
     return partitioner.split('.')[-1]
 
 
-def multi_upgrade_test_id(multi_upgrade):
-    return multi_upgrade.name
+def upgrade_test_config_id(upgrade_test_config):
+    if upgrade_test_config.bootstrap is None:
+        return upgrade_test_config.name
+    if upgrade_test_config.bootstrap == 'bootstrap':
+        return upgrade_test_config.name + "WithBootstrap"
+    return upgrade_test_config.name + "WithBootstrapMultiDc"
