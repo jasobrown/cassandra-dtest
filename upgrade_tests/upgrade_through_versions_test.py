@@ -817,6 +817,10 @@ def pytest_generate_tests(metafunc):
 
 
 def partitioner_id(partitioner):
+    """
+    :param partitioner: assumes the name is a fully-qualified java class name
+    :return: the short name of the partitioner
+    """
     return partitioner.split('.')[-1]
 
 
