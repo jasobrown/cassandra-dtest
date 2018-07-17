@@ -29,7 +29,8 @@ def switch_jdks(major_version_int):
     # don't change if the same version was requested
     current_java_home = os.environ.get('JAVA_HOME')
     if current_java_home != os.environ[new_java_home]:
-        logger.debug("Switching jdk to version {} (JAVA_HOME is changing from {} to {})".format(major_version_int, current_java_home or 'undefined', os.environ[new_java_home]))
+        logger.debug("Switching jdk to version {} (JAVA_HOME is changing from {} to {})"
+                     .format(major_version_int, current_java_home or 'undefined', os.environ[new_java_home]))
         os.environ['JAVA_HOME'] = os.environ[new_java_home]
 
 
@@ -61,11 +62,14 @@ class UpgradeTester(Tester, metaclass=ABCMeta):
             r'RejectedExecutionException.*ThreadPoolExecutor has shut down',  # see  CASSANDRA-12364
         ]
 
+    # TODO:JEB make me a fixture, but will need dtest_config *and* the version_metas (which will be harder to get)
     def setUp(self):
         self.validate_class_config()
         logger.debug("Upgrade test beginning, setting CASSANDRA_VERSION to {}, and jdk to {}. (Prior values will be restored after test)."
               .format(self.UPGRADE_PATH.starting_version, self.UPGRADE_PATH.starting_meta.java_version))
         switch_jdks(self.UPGRADE_PATH.starting_meta.java_version)
+
+        # TODO:JEB set the version into the dtest_config instance; dump this env var
         os.environ['CASSANDRA_VERSION'] = self.UPGRADE_PATH.starting_version
         super(UpgradeTester, self).setUp()
 

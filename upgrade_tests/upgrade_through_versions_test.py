@@ -236,6 +236,26 @@ class TestUpgrade(Tester):
     protocol_version = None
 
     @pytest.fixture(autouse=True)
+    def env_setup_for_upgrade(self, dtest_config, upgrade_test_config):
+        """
+        Forces the lowest meta version (and it's jdk).
+
+        Note: this *must* execute before a cluster is setup (in the fixture conftest::fixture_dtest_setup);
+        else, we create a cluster on the current c* version in the dtest_config (which is where we want upgrade to,
+        not start from).
+        """
+        logger.debug("Upgrade test beginning, setting CASSANDRA_VERSION to {}, and jdk to {}. "
+                     "(Prior values will be restored after test)."
+                     .format(upgrade_test_config.version_metas[0].version,
+                             upgrade_test_config.version_metas[0].java_version))
+
+        # TODO:JEB may need some extra finesse around this in dtest_config, wrt cassandra_dir
+        dtest_config.cassandra_version = upgrade_test_config.version_metas[0].version
+        switch_jdks(upgrade_test_config.version_metas[0].java_version)
+        logger.debug("Versions to test (%s): %s" %
+                     (type(self), str([v.version for v in upgrade_test_config.version_metas])))
+
+    @pytest.fixture(autouse=True)
     def fixture_add_additional_log_patterns(self, fixture_dtest_setup):
         fixture_dtest_setup.ignore_log_patterns = (
             # This one occurs if we do a non-rolling upgrade, the node
@@ -248,25 +268,6 @@ class TestUpgrade(Tester):
             # Normal occurance. See CASSANDRA-12026. Likely won't be needed after C* 4.0.
             r'Unknown column cdc during deserialization',
         )
-
-    # TODO:JEB literally have no fucking idea if/how this is called.
-    # setting os.env should be unused.
-    # setUp used almost nowhere else in code base - might be legacy naming from nosetest
-    # os.environ['CASSANDRA_VERSION'] only set here and in upgrade_base
-    def setUp(self):
-        logger.debug("Upgrade test beginning, setting CASSANDRA_VERSION to {}, and jdk to {}. "
-                     "(Prior values will be restored after test)."
-                     .format(self.test_version_metas[0].version, self.test_version_metas[0].java_version))
-        os.environ['CASSANDRA_VERSION'] = self.test_version_metas[0].version
-        switch_jdks(self.test_version_metas[0].java_version)
-
-        super(TestUpgrade, self).setUp()
-        logger.debug("Versions to test (%s): %s" % (type(self), str([v.version for v in self.test_version_metas])))
-
-    # TODO:JEB literally have no fucking idea if this is called. there's a reference to "cls.init_config"
-    # in dtest_setup, but it's commented out :( #fml
-    def init_config(self):
-        Tester.init_config(self)
 
     def test_upgrade_scenario(self, upgrade_test_config, partitioner, internode_ssl, rolling):
         self.protocol_version = upgrade_test_config.protocol_version
@@ -297,6 +298,11 @@ class TestUpgrade(Tester):
             cluster.populate(3)
             [node.start(use_jna=True, wait_for_binary_proto=True) for node in cluster.nodelist()]
 
+            # add nodes to self for convenience
+            for i, node in enumerate(cluster.nodelist(), 1):
+                node_name = 'node' + str(i)
+                setattr(self, node_name, node)
+
             if rolling:
                 self._create_schema_for_rolling()
             else:
@@ -305,11 +311,6 @@ class TestUpgrade(Tester):
 
             if upgrade_test_config.bootstrap == 'bootstrap':
                 after_upgrade_call = self.setup_bootstrap()
-
-        # add nodes to self for convenience
-        for i, node in enumerate(cluster.nodelist(), 1):
-            node_name = 'node' + str(i)
-            setattr(self, node_name, node)
 
         self._log_current_ver(self.test_version_metas[0])
 
@@ -356,12 +357,13 @@ class TestUpgrade(Tester):
                 self._check_counters()
                 self._check_select_count()
 
-            # run custom post-upgrade callables
-        for call in after_upgrade_call:
-            call()
+        # run custom post-upgrade callables
+        pytest.set_trace()
+        if after_upgrade_call is not None:
+            after_upgrade_call()
 
-            logger.debug('All nodes successfully upgraded to %s' % version_meta.version)
-            self._log_current_ver(version_meta)
+        logger.debug('All nodes successfully upgraded to %s' % version_meta.version)
+        self._log_current_ver(version_meta)
 
         cluster.stop()
 

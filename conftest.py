@@ -362,7 +362,7 @@ def _skip_msg(current_running_version, since_version, max_version):
 
 
 @pytest.fixture(autouse=True)
-def fixture_since(request, fixture_dtest_setup):
+def fixture_since(request, dtest_config):
     if request.node.get_marker('since'):
         max_version_str = request.node.get_marker('since').kwargs.get('max_version', None)
         max_version = None
@@ -373,19 +373,19 @@ def fixture_since(request, fixture_dtest_setup):
         since = LooseVersion(since_str)
         # use cassandra_version_from_build as it's guaranteed to be a LooseVersion
         # whereas cassandra_version may be a string if set in the cli options
-        current_running_version = fixture_dtest_setup.dtest_config.cassandra_version_from_build
+        current_running_version = dtest_config.cassandra_version_from_build
         skip_msg = _skip_msg(current_running_version, since, max_version)
         if skip_msg:
             pytest.skip(skip_msg)
 
 
 @pytest.fixture(autouse=True)
-def fixture_skip_version(request, fixture_dtest_setup):
+def fixture_skip_version(request, dtest_config):
     marker = request.node.get_marker('skip_version')
     if marker is not None:
         for info in marker:
             version_to_skip = LooseVersion(info.args[0])
-            if version_to_skip == fixture_dtest_setup.dtest_config.cassandra_version_from_build:
+            if version_to_skip == dtest_config.cassandra_version_from_build:
                 pytest.skip("Test marked not to run on version %s" % version_to_skip)
 
 
