@@ -269,7 +269,7 @@ class TestUpgrade(Tester):
             r'Unknown column cdc during deserialization',
         )
 
-    def test_upgrade_scenario(self, upgrade_test_config, partitioner, internode_ssl, rolling):
+    def test_upgrade_scenario(self, upgrade_test_config, partitioner, rolling):
         self.protocol_version = upgrade_test_config.protocol_version
         self.test_version_metas = upgrade_test_config.version_metas
 
@@ -284,7 +284,7 @@ class TestUpgrade(Tester):
 
         cluster.set_configuration_options({'partitioner': partitioner})
 
-        if internode_ssl:
+        if upgrade_test_config.internode_ssl:
             logger.debug("***using internode ssl***")
             generate_ssl_stores(self.fixture_dtest_setup.test_path)
             self.cluster.enable_internode_ssl(self.fixture_dtest_setup.test_path)
@@ -327,7 +327,7 @@ class TestUpgrade(Tester):
                     # which we could possibly "speed past" in an overly fast upgrade test
                     time.sleep(60)
 
-                    self.upgrade_to_version(version_meta, partial=True, nodes=(node,), internode_ssl=internode_ssl)
+                    self.upgrade_to_version(version_meta, partial=True, nodes=(node,), internode_ssl=upgrade_test_config.internode_ssl)
 
                     self._check_on_subprocs(self.fixture_dtest_setup.subprocs)
                     logger.debug('Successfully upgraded %d of %d nodes to %s' %
@@ -350,7 +350,7 @@ class TestUpgrade(Tester):
                 self._write_values()
                 self._increment_counters()
 
-                self.upgrade_to_version(version_meta, internode_ssl=internode_ssl)
+                self.upgrade_to_version(version_meta, internode_ssl=upgrade_test_config.internode_ssl)
                 self.cluster.set_install_dir(version=version_meta.version)
 
                 self._check_values()
@@ -358,7 +358,6 @@ class TestUpgrade(Tester):
                 self._check_select_count()
 
         # run custom post-upgrade callables
-        pytest.set_trace()
         if after_upgrade_call is not None:
             after_upgrade_call()
 
@@ -752,7 +751,8 @@ MULTI_UPGRADES = (
 )
 
 
-UpgradeTestConfig = namedtuple('UpgradeTestConfig', ('name', 'version_metas', 'protocol_version', 'bootstrap'))
+UpgradeTestConfig = namedtuple('UpgradeTestConfig', ('name', 'version_metas', 'protocol_version',
+                                                     'bootstrap', 'internode_ssl'))
 
 
 def pytest_generate_tests(metafunc):
@@ -785,7 +785,8 @@ def pytest_generate_tests(metafunc):
             if dtest_config.run_full_upgrade_matrix:
                 upgrades_to_run.append(UpgradeTestConfig(bootstrap=None, name=upgrade.name,
                                                          version_metas=upgrade.version_metas,
-                                                         protocol_version=upgrade.protocol_version))
+                                                         protocol_version=upgrade.protocol_version,
+                                                         internode_ssl=False))
             else:
                 metas = upgrade.version_metas
 
@@ -800,22 +801,28 @@ def pytest_generate_tests(metafunc):
                                  .format(upgrade.name, oldmeta.version, newmeta.version))
                     metas[-1] = newmeta
                     upgrades_to_run.append(UpgradeTestConfig(bootstrap=None, name=upgrade.name, version_metas=metas,
-                                                             protocol_version=upgrade.protocol_version))
+                                                             protocol_version=upgrade.protocol_version,
+                                                             internode_ssl=False))
 
     # build up a set of upgrades to test the full upgrade (and bootstrap) paths
     # pair is type upgrade_manifest::UpgradePath -- "python can fucking eat me", @jasobrown 2018
     for pair in build_upgrade_pairs(dtest_config):
-        upgrades_to_run.append(UpgradeTestConfig(bootstrap=None, name=pair.name,
-                                                 version_metas=[pair.starting_meta, pair.upgrade_meta],
-                                                 protocol_version=pair.starting_meta.max_proto_v))
+        for internode_ssl in [True, False]:
+            for bootstrap in [None, 'bootstrap', 'bootstrap_multidc']:
+                upgrades_to_run.append(UpgradeTestConfig(bootstrap=bootstrap, name=pair.name,
+                                                         version_metas=[pair.starting_meta, pair.upgrade_meta],
+                                                         protocol_version=pair.starting_meta.max_proto_v,
+                                                         internode_ssl=internode_ssl))
 
     metafunc.parametrize('upgrade_test_config', upgrades_to_run, ids=upgrade_test_config_id)
 
     # general parameters of which all combinations should be executed
-    metafunc.parametrize("rolling", [True, False], ids=['rolling_upgrade', 'parallel_upgrade'])
-    partitioners = ['org.apache.cassandra.dht.Murmur3Partitioner', 'org.apache.cassandra.dht.RandomPartitioner']
+    metafunc.parametrize("rolling", [True, False], ids=['parallel_upgrade', 'rolling_upgrade'])
+
+    # TODO:JEB fix RandomPartioner & setting initial_token
+    partitioners = ['org.apache.cassandra.dht.Murmur3Partitioner']
+    # partitioners = ['org.apache.cassandra.dht.Murmur3Partitioner', 'org.apache.cassandra.dht.RandomPartitioner']
     metafunc.parametrize("partitioner", partitioners, ids=partitioner_id)
-    metafunc.parametrize("internode_ssl", [True, False], ids=['with_internode_ssl', 'without_internode_ssl'])
 
 
 def partitioner_id(partitioner):
@@ -827,8 +834,18 @@ def partitioner_id(partitioner):
 
 
 def upgrade_test_config_id(upgrade_test_config):
+    name = upgrade_test_config.name
+
     if upgrade_test_config.bootstrap is None:
-        return upgrade_test_config.name
-    if upgrade_test_config.bootstrap == 'bootstrap':
-        return upgrade_test_config.name + "WithBootstrap"
-    return upgrade_test_config.name + "WithBootstrapMultiDc"
+        name += "-no-bootstrap"
+    elif upgrade_test_config.bootstrap == 'bootstrap':
+        name += "-with_bootstrap"
+    else:
+        name += "-with_multidc_bootstrap"
+
+    if upgrade_test_config.internode_ssl:
+        name += "-with_internode_ssl"
+    else:
+        name += "-without_internode_ssl"
+
+    return name
