@@ -69,6 +69,8 @@ class TestThriftHSHA(Tester):
                 pools.append(make_connection())
             logger.debug("Disabling/Enabling thrift iteration #{i}".format(i=i))
             node1.nodetool('disablethrift')
+            # cowardly attempt to give the socket/resources time to be released
+            time.sleep(2)
             node1.nodetool('enablethrift')
             logger.debug("Closing connections from the client side..")
             for client in pools:
