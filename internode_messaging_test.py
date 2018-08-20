@@ -7,7 +7,7 @@ from dtest import Tester
 since = pytest.mark.since
 logger = logging.getLogger(__name__)
 
-_LOG_ERR_ILLEGAL_CAPACITY = "Caused by: java.lang.IllegalArgumentException: Illegal Capacity: -1"
+_LOG_ERR_ILLEGAL_CAPACITY = "java.lang.IllegalArgumentException: Illegal Capacity: -1"
 
 
 @since('4.0')
