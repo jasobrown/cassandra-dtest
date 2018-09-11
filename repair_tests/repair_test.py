@@ -1251,10 +1251,13 @@ class TestRepair(BaseRepairTest):
         cluster.populate(3).start(wait_for_binary_proto=True)
 
         node1, node2, node3 = cluster.nodelist()
-        node1.stress(['user', 'profile=/opt/dev/patches/13938/13938.yaml', 'ops(insert=20,single=1,series=1)', 'duration=10s', 'no-warmup', '-rate', 'threads=4'])
+        profile_path = os.path.join(os.getcwd(), 'stress_profiles/repair_13938.yaml')
+        node1.stress(['user', 'profile=' + profile_path, 'ops(insert=20,single=1,series=1)', 'duration=10s',
+                      'no-warmup', '-rate', 'threads=4'])
         node1.stop()
 
-        node2.stress(['user', 'profile=/opt/dev/patches/13938/13938.yaml', 'ops(insert=20,single=1,series=1)', 'duration=30s', 'no-warmup', '-rate', 'threads=4'])
+        node2.stress(['user', 'profile=' + profile_path, 'ops(insert=20,single=1,series=1)', 'duration=30s',
+                      'no-warmup', '-rate', 'threads=4'])
         node1.start()
 
         def node_repair():

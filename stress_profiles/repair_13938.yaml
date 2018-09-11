@@ -1,0 +1,38 @@
+keyspace: standard_long
+
+keyspace_definition: |
+  CREATE KEYSPACE standard_long WITH replication = {'class':'SimpleStrategy', 'replication_factor':3};
+table: test_data
+
+table_definition: |
+  CREATE TABLE test_data (
+  key text,
+  ts bigint,
+  val text,
+  PRIMARY KEY (key, ts)
+  ) WITH CLUSTERING ORDER BY (ts DESC) AND
+  compression={'sstable_compression': 'LZ4Compressor'};
+
+columnspec:
+  - name: key
+    population: uniform(1..50000000) # 50 million records available
+
+  - name: ts
+    cluster: gaussian(1..50) # Up to 50 inserts per record
+
+  - name: val
+    population: gaussian(128..1024) # varrying size of value data
+
+
+insert:
+  partitions: fixed(1) # only one insert per batch for individual partitions
+  select: fixed(1)/1 # each insert comes in one at a time
+  batchtype: UNLOGGED
+
+queries:
+
+  single:
+    cql: select * from test_data where key = ? and ts = ? limit 1;
+
+  series:
+    cql: select key,ts,val from test_data where key = ? limit 10;
